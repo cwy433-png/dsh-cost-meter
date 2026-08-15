@@ -1,0 +1,11 @@
+{
+  "name": "dsh-cost-meter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness 动态 Cordis 插件：按事件时间分段计价的对话成本与账户余额计量器（dsh-cost-meter）",
+  "scripts": {
+    "test": "node --test tests/host.test.mjs"
+  },
+  "license": "UNLICENSED"
+}

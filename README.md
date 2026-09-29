@@ -1,98 +1,68 @@
 # dsh-cost-meter
 
-DeepSeek Harness 的动态 Cordis 插件：在 Web GUI 输入框下方显示 **本对话消耗（估算）** 与 **DeepSeek 账户余额** 的实时计数器。
+DeepSeek Harness 插件：在对话输入框下方显示 **本对话消耗（估算）** 和 **DeepSeek 账户余额**。
 
-当前版本：`cost-2/pkg-6`（**时间分段计价 + 双币种切换 + 自动跟随有余额币种**；源码在本仓库）。
+`● 消耗 ¥1.26 · 余额 ¥45.67 ▾  [$|¥]`，点击展开明细：分段金额、按模型金额、token 与缓存命中率、上下文占用、余额明细、单价表。
 
-## 核心设计（pkg-5）
+v0.2 起是**正式插件**（profile bundle），随 harness 启动自动加载，重启不会消失。适配 dsh 0.1.7。
 
-1. **按事件时间分段计价**：Host 逐条读取会话事件日志（`session.log`），把每条用量事件按**它产生时刻**的官方时段（旧价 / 峰时 / 谷时）归段计价。2026-08-16 16:00 UTC 之后只有**新用量**进入峰/谷时段，历史分段金额封存；进程重启后从持久化日志重放结果一致。
-2. **双币种官方价目切换**：DeepSeek 官方为 USD 和 CNY 发布**两套独立价目表**（两者比例不是单一汇率：flash 约 7.14、pro 约 6.90）。插件内置两套表，点击胶囊旁的 **`$` / `¥` 图标**把整个计量器切到该币种口径（消耗与余额一起切换），**不做任何汇率折算**。余额接口的 `balance_infos` 本就是分开的币种条目，切到哪个币种就显示哪个条目。
-3. **模型归因**：按每次 `request/header` 事件记录的 provider/model 分别计价；同会话换模型不串价。
+## 安装 / 卸载
 
-## 功能
+用 harness 自带的命令（Harbor 的 harness 在 `~/Library/Application Support/Harbor for DeepSeek Harness/current`）：
 
-- **常驻胶囊**（`conversation.composer.dock`）：`● 消耗 ¥0.42 · 余额 ¥45.67 ▾` + **`$ / ¥` 币种切换按钮**
-  - 未手动选择币种时，自动选中**第一个有非零余额**的币种条目（多数账号只充值一个币种）；手动选择会保存并永久生效
-- **展开面板**（上浮 popover，点击外部 / ESC 关闭）：
-  - 本对话消耗：总金额、当前模型与计价时段、**分段明细**（旧价段 / 峰时段 / 谷时段各自金额与步数）、按模型明细
-  - 账户余额：当前币种的总余额 + 赠送/充值明细、其他币种余额、手动刷新（标注「只读查询」）
-  - 单价设置：当前币种的官方报价表（可编辑）、自动 / 手动时段选择、恢复官方价（USD + CNY 一起重置）
-- **计价时段自动化**：`自动` = 按事件时刻分段；`手动` = 全部历史按所选单档重算（明示为「手动口径」）
+```sh
+DSH="$HOME/Library/Application Support/Harbor for DeepSeek Harness/current/node_modules/@deepseek-ai/dsh/lib/bin.js"
+node "$DSH" plugin --profile web add "$HOME/工作/harbor/dsh-cost-meter"   # 安装（link，改源码即生效）
+node "$DSH" plugin --profile web remove dsh-cost-meter                              # 卸载（还需从 package.json 的 dsh.profile.bundles 删掉）
+```
 
-## 架构与数据源
+装完重启 harness（Harbor 退出再打开）。
 
-| 数据 | 来源 |
+## 计价规则
+
+每次模型调用按**它发生那一刻**的官方价目计价，历史金额不会因为之后的调价或时段切换而改变：
+
+| 时间 | 规则 |
 | --- | --- |
-| 用量展示（实时） | Client 标准 prop `useProjection('tokenUsage')` / `('contextPressure')` |
-| 用量计费（权威） | Host 遍历 `sessions.get(sessionId).log`：`request/header`、`assistant/chunk`(usage)、`assistant/message`(usage) 事件，增量缓存，替换语义与 token-meter 投影一致 |
-| 模型归因 | 会话日志中最新 `request/header` 事件的 `header.config.{provider,model}`；无则回退 `agentDefaultModel.currentSelection()`（UI 标注"部署默认"） |
-| 单价表 | Host 内存 `prices`（USD + CNY 两套官方价目），`set-price` 按币种白名单校验，`reset-prices` 恢复官方价 |
-| 账户余额 | Host 经 `credentials.resolve` 取凭证（key 名跟随 `llm-deepseek` 设置），`curl -K -` 从 **stdin** 读 `Authorization` 头直连 `GET <baseURL>/user/balance`；baseURL 跟随 `llm-deepseek` 设置 / `DEEPSEEK_BASE_URL`。**纯只读，密钥不进 argv、不显示、不记录** |
+| 北京时间 2026-08-17 00:00 前 | 旧价（不分峰谷） |
+| 之后 | 北京时间**工作日** 9:00–12:00、14:00–18:00 为峰时；其余时间、周末、法定节假日为谷时（谷时 = 峰时半价） |
+| flash 自北京时间 2026-09-10 00:00 起 | 按 V4.1 Flash（`deepseek-flash`）新价；`deepseek-v4-flash` 同样路由到 V4.1 |
 
-Host ↔ Client RPC（动态插件为 `harness.handle` / `host.call`）：
+- 官方只写了 9/10 发布，没写几点生效，这里假设北京时间零点。
+- 峰谷的“工作日 + 节假日”规则取自现在的官方定价页；8/13 公告没提这一条，这里按 8/17 起一直适用处理。
+- 法定节假日表在 `lib/core.js` 的 `HOLIDAYS`，目前只有 2026 年；2027 年安排公布后要补。
+- USD 与 CNY 是两套独立官方价目，插件不做汇率折算。非 DeepSeek 模型不计价。
 
-- `prices` → `{currencies:['USD','CNY'], rows:[{key, USD:{flat,peak,off}, CNY:{flat,peak,off}}]}`
-- `set-price {currency, key, scheme, in, cache, out}` → `{ok, rows, currencies}` / `{ok:false, reason}`
-- `reset-prices` → `{ok, rows, currencies}`
-- `rates` → `{now, cutoffMs, peakWindows, scheme, nextTransitionMs}`
-- `session-cost {sessionId, scheme, currency}` → 分段计费报告（自动时段分段 / 手动整段重算，所选币种金额）
-- `balance {force?}` → 多币种余额 + 状态（Host 端 TTL 缓存 + in-flight 合并）
+### 官方价目（每百万 tokens，2026-09-29 核对）
 
-## 仓库结构
+| 模型 | 时段 | 缓存命中 | 未命中 | 输出 |
+| --- | --- | --- | --- | --- |
+| deepseek-flash（V4.1） | 谷 / 峰 | ¥0.02 / 0.04 · $0.003 / 0.006 | ¥1 / 2 · $0.15 / 0.30 | ¥4 / 8 · $0.60 / 1.20 |
+| deepseek-v4-flash（9/10 前） | 旧价 | ¥0.02 · $0.0028 | ¥1 · $0.14 | ¥2 · $0.28 |
+| | 谷 / 峰 | ¥0.05 / 0.10 · $0.007 / 0.014 | ¥1.5 / 3 · $0.22 / 0.44 | ¥4.5 / 9 · $0.66 / 1.32 |
+| deepseek-v4-pro | 旧价 | ¥0.025 · $0.003625 | ¥3 · $0.435 | ¥6 · $0.87 |
+| | 谷 / 峰 | ¥0.15 / 0.30 · $0.022 / 0.044 | ¥4.5 / 9 · $0.66 / 1.32 | ¥13.5 / 27 · $1.98 / 3.96 |
 
-```
-src/host.js          动态插件 Host 半边（pkg-5 草稿，函数体即 code.host）
-src/client.js        动态插件 Client 半边（pkg-5 草稿，函数体即 code.client）
-tests/host.test.mjs  Host 引擎单元测试（分段计价 / 模型归因 / 双币种 / 余额安全）
-package.json         npm test 入口（无运行时依赖）
-README.md            本文件
-NOTES.md             交接笔记：部署状态、已知问题、永久固化步骤
-```
+来源：[中文定价页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) · [英文定价页](https://api-docs.deepseek.com/quick_start/pricing/) · [更新日志](https://api-docs.deepseek.com/zh-cn/updates)。官方再调价时改 `lib/core.js` 的价目和日期，并把 `STATE_VERSION` 加一。
 
-运行测试：`npm test`（Node 内置 test runner，17 个用例）。
+## 结构
+
+| 文件 | 作用 |
+| --- | --- |
+| `lib/core.js` | 纯函数：时段表、价目、用量折叠（session projection）、计价 |
+| `index.js` | Host 半：注册 `costMeter` projection；在 Connection 鉴权内注册 `api/cost-meter/prices`（GET/POST）和 `api/cost-meter/balance`（GET） |
+| `client.js` | Web 客户端：`conversation.composer.dock` 槽里的胶囊和面板 |
+| `cordis.patch.yml` | bundle 补丁，把 host 插件挂进 profile |
+| `tests/core.test.mjs` | `npm test` |
+
+- **用量**来自 harness 的 session projection：重放持久化的会话日志，结果进 projection 缓存，重启后照样对。去重规则与内置 `tokenUsage` 一致（同一 turn/step 替换，`llm/retry-started` 后累加）。
+- **余额**：Host 用模型调用同一个凭证（`credentials.resolve`，key 名跟随 `llm-deepseek` 设置）直连 `GET <origin>/user/balance`。纯只读；密钥只发给该接口，不返回给页面、不写日志。30 秒缓存，多标签页合并请求。
+- **改价**只在本次运行有效，重启恢复官方价。
+- 三个接口都在 harness 的登录鉴权之内，未登录请求返回 401。
 
 ## 版本史
 
 | 版本 | 变更 |
 | --- | --- |
-| pkg-1 | `llm/stream` 瀑布拦截 + 1.5s 轮询，插件启动起累计，¥ 计价 |
-| pkg-2 | 改用 `useProjection` 投影，加余额查询（初版，只取 `balance_infos[0]`） |
-| pkg-3 | 官方模型表重写、峰谷计价、UI 重做 |
-| pkg-4 | 多币种余额修复：返回全部币种条目、逐币种显示 |
-| pkg-5 | **时间分段计价**（事件日志逐条归段、历史不重算）+ 按 request/header 模型归因 + Host 权威计价；**双币种官方价目切换**（$ / ¥ 图标，无汇率折算）；余额：stdin 传密钥、TTL 缓存、baseURL 跟随适配器、错误分类；价格 RPC 白名单 + 恢复默认 |
-| pkg-6 | Client 增加**自动币种选择**：无手动选择时跟随第一个非零余额币种；手动选择持久化后不再自动跳转。Host 半边与 pkg-5 完全一致 |
-
-## 官方价格（per 1M tokens，来源见下）
-
-### USD 价目（英文官方定价页）
-
-| 模型 | 时期 | 缓存命中 | 缓存未命中 | 输出 |
-| --- | --- | --- | --- | --- |
-| deepseek-v4-flash | 旧价（≤8/16 16:00 UTC） | $0.0028 | $0.14 | $0.28 |
-| deepseek-v4-flash | 谷时 / 峰时（8/16 起） | $0.007 / $0.014 | $0.22 / $0.44 | $0.66 / $1.32 |
-| deepseek-v4-pro | 旧价（≤8/16 16:00 UTC） | $0.003625 | $0.435 | $0.87 |
-| deepseek-v4-pro | 谷时 / 峰时（8/16 起） | $0.022 / $0.044 | $0.66 / $1.32 | $1.98 / $3.96 |
-
-### CNY 价目（中文官方定价页，元）
-
-| 模型 | 时期 | 缓存命中 | 缓存未命中 | 输出 |
-| --- | --- | --- | --- | --- |
-| deepseek-v4-flash | 旧价（≤北京时间 8/17 00:00） | 0.02 | 1 | 2 |
-| deepseek-v4-flash | 谷时 / 峰时（8/17 起） | 0.05 / 0.10 | 1.5 / 3.0 | 4.5 / 9.0 |
-| deepseek-v4-pro | 旧价（≤北京时间 8/17 00:00） | 0.025 | 3 | 6 |
-| deepseek-v4-pro | 谷时 / 峰时（8/17 起） | 0.15 / 0.30 | 4.5 / 9.0 | 13.5 / 27.0 |
-
-来源：[DeepSeek 官方定价页（EN/USD）](https://api-docs.deepseek.com/quick_start/pricing/) · [DeepSeek 官方定价页（中文/CNY）](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)。峰时 = UTC 1:00–4:00、6:00–10:00（北京时间 9:00–12:00、14:00–18:00）。
-
-## 说明与限制
-
-- 动态插件是**进程内临时**的：进程重启即消失，需重新 define/run。永久固化方案见 [NOTES.md](NOTES.md)。
-- 金额为按官方刊例价的估算值；手动改价仅存于插件内存，重启回到默认。
-- 用量事件按 `(turn, step)` 替换语义去重（chunk 采样被最终 assistant 消息替换），与自带统计行同口径；被压缩 shadow 掉的步骤仍计入（与官方 token-meter 一致）。
-- USD 与 CNY 是两套独立官方价目，插件不引入任何汇率来源；若 DeepSeek 将来官方调价，需同步更新 `src/host.js` 的 `defaults` 与本表。
-- 余额查询为只读 GET，插件没有任何扣费/写操作路径。
-
-## License
-
-暂未确定。
+| pkg-1 … pkg-6 | 动态 Cordis 插件（进程内临时，重启即消失），见 git 历史 |
+| 0.2.0 | 改成正式 bundle 插件，适配 dsh 0.1.7：数据源改为 session projection；RPC 改为鉴权内的 fetch 路由；余额改用 Node fetch；新增 V4.1 Flash 价目、工作日/法定节假日规则；面板改为固定定位，不再被输入区裁切 |

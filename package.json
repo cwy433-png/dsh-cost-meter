@@ -1,11 +1,24 @@
 {
   "name": "dsh-cost-meter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "DeepSeek Harness 动态 Cordis 插件：按事件时间分段计价的对话成本与账户余额计量器（dsh-cost-meter）",
+  "description": "DeepSeek Harness 插件：对话输入框下方显示本对话估算消耗（按调用时刻的官方峰谷价目）与 DeepSeek 账户余额",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "client.js", "lib", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  },
   "scripts": {
-    "test": "node --test tests/host.test.mjs"
+    "test": "node --test tests/*.test.mjs"
   },
   "license": "UNLICENSED"
 }

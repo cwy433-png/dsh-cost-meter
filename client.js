@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
 
     const CSS = `
 .cm-root { position: relative; z-index: 40; display: flex; flex-direction: row; align-items: center; gap: 6px; max-width: 100%; }
-.cm-pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1; cursor: pointer; font-family: inherit; transition: border-color .15s ease, color .15s ease; }
+.cm-pill { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex: none; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1; cursor: pointer; font-family: inherit; transition: border-color .15s ease, color .15s ease; }
 .cm-pill:hover { border-color: var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); }
 .cm-pill:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 .cm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-brand-primary); }
